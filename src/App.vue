@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import ChatBox from './components/ChatBox.vue'
 import NetworkGraph from './components/NetworkGraph.vue'
-import type { CBN, Node, Edge } from './types/cbn'
+import type { CBN, Node, Edge, Message } from './types/cbn'
 import LLMService from './lib/llm'
 
 interface DialogueState {
@@ -17,7 +17,6 @@ const dialogueState = ref<DialogueState>({
   selectedEdge: null
 })
 
-// Initial CBN state from NOTES.md
 const initialCBN: CBN = {
   nodes: [
     { id: '1', name: 'Local Support', states: ['Weak', 'Strong'], category: 'Social' },
@@ -46,10 +45,10 @@ const initialCBN: CBN = {
 }
 
 const cbn = ref<CBN>(initialCBN)
-const messages = ref([
+const messages = ref<Message[]>([
   {
     text: 'Welcome to the Seagrass CBN Builder! How can I help you explore and refine the causal network?',
-    sender: 'bot'
+    sender: 'bot' as const
   }
 ])
 
@@ -59,58 +58,46 @@ const llmService = new LLMService({
   baseUrl: 'https://openrouter.ai/api/v1/chat/completions'
 })
 
+const isLoading = ref(false)
+
 const handleSendMessage = async (message: string) => {
   messages.value.push({ text: message, sender: 'user' });
-
-  // Show loading state
-  const loadingMessage = { text: 'Processing...', sender: 'bot' };
-  messages.value.push(loadingMessage);
+  isLoading.value = true;
 
   try {
     const response = await llmService.processUserInput(cbn.value, message);
 
-    // Find and remove the loading message
-    const loadingIndex = messages.value.findIndex(msg => msg === loadingMessage);
-    if (loadingIndex !== -1) {
-      messages.value.splice(loadingIndex, 1);
+    // Update the CBN if changes were suggested
+    if (response.updated_cbn) {
+      const changes = compareNetworks(cbn.value, response.updated_cbn);
+      if (changes.length > 0) {
+        cbn.value = response.updated_cbn;
+      }
     }
 
-    // Always show the first suggestion as it contains the main explanation
+    // Build response message
+    const responseParts = [];
+
     if (response.tentative_suggestions.length > 0) {
-      messages.value.push({
-        text: response.tentative_suggestions[0],
-        sender: 'bot'
-      });
+      responseParts.push(response.tentative_suggestions.join('\n'));
     }
 
-    // Show additional suggestions if any
-    if (response.tentative_suggestions.length > 1) {
-      messages.value.push({
-        text: 'Additional insights:\n' + response.tentative_suggestions.slice(1).join('\n'),
-        sender: 'bot'
-      });
-    }
-
-    // Show reflection prompts if any
     if (response.reflection_prompts.length > 0) {
-      messages.value.push({
-        text: 'Consider these aspects:\n• ' + response.reflection_prompts.join('\n• '),
-        sender: 'bot'
-      });
-    }
-  } catch (error) {
-    console.error('Chat Error:', error);
-
-    // Find and remove the loading message
-    const loadingIndex = messages.value.findIndex(msg => msg === loadingMessage);
-    if (loadingIndex !== -1) {
-      messages.value.splice(loadingIndex, 1);
+      responseParts.push('\nConsider these aspects:\n• ' + response.reflection_prompts.join('\n• '));
     }
 
     messages.value.push({
-      text: 'I understand you\'re asking about the relationship between Water Quality and Seagrass Biomass. Water Quality directly affects seagrass growth and survival through light availability and nutrient levels. Would you like to explore specific aspects of this relationship?',
+      text: responseParts.join('\n\n') || 'I understand your request about updating probabilities. Could you provide more specific details about the relationship you want to examine?',
       sender: 'bot'
     });
+  } catch (error) {
+    console.error('Error processing message:', error);
+    messages.value.push({
+      text: 'I apologize, but I encountered an error processing your request. Please try again or rephrase your question.',
+      sender: 'bot'
+    });
+  } finally {
+    isLoading.value = false;
   }
 }
 
@@ -169,7 +156,7 @@ const handleEdgeClick = (edgeId: string) => {
 <template>
   <div class="app-container">
     <div class="chat-section">
-      <ChatBox :messages="messages" @send-message="handleSendMessage" />
+      <ChatBox :messages="messages" :is-loading="isLoading" @send-message="handleSendMessage" />
     </div>
     <div class="graph-section">
       <NetworkGraph :nodes="cbn.nodes" :edges="cbn.edges" :edit-mode="true" :hierarchical-layout="false"

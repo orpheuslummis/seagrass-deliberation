@@ -1,8 +1,27 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 
+// Add structured message types
+interface Message {
+    text: string;
+    sender: 'user' | 'bot';
+    type?: 'suggestion' | 'analysis' | 'question' | 'error';
+    metadata?: {
+        nodeId?: string;
+        edgeId?: string;
+        confidence?: number;
+        references?: string[];
+    };
+}
+
 const props = defineProps<{
-    messages: Array<{ text: string, sender: string }>
+    messages: Array<Message>,
+    isLoading?: boolean,
+    currentContext?: {
+        selectedNode?: string;
+        selectedEdge?: string;
+        focusArea?: 'probability' | 'structure' | 'validation'
+    }
 }>()
 
 const emit = defineEmits<{
@@ -41,13 +60,67 @@ const suggestions = ref([
     "What factors influence Local Support?",
     "Update the probability of Restoration Investment affecting Water Quality"
 ])
+
+const formatBotMessage = (message: Message) => {
+    if (message.type === 'error') {
+        return `<div class="error-message">${message.text}</div>`;
+    }
+
+    // Split into sections and format based on message type
+    const sections = message.text.split('\n\n').filter(p => p.trim());
+
+    return sections.map(section => {
+        // Format suggestions with checkboxes
+        if (section.includes('•') && message.type === 'suggestion') {
+            return `<div class="suggestion-list">
+                ${section.split('\n').map(line => {
+                if (line.includes('•')) {
+                    return `<label class="suggestion-item">
+                            <input type="checkbox">
+                            <span>${line.replace('•', '').trim()}</span>
+                        </label>`;
+                }
+                return `<p>${line.trim()}</p>`;
+            }).join('')}
+            </div>`;
+        }
+
+        // Format analysis with highlights
+        if (message.type === 'analysis') {
+            return `<div class="analysis-section">
+                ${section.includes(':')
+                    ? `<h4>${section.split(':')[0]}</h4>
+                       <p>${section.split(':')[1].trim()}</p>`
+                    : `<p>${section}</p>`}
+            </div>`;
+        }
+
+        // Format questions to encourage interaction
+        if (message.type === 'question') {
+            return `<div class="reflection-question">
+                <span class="question-icon">?</span>
+                <p>${section}</p>
+            </div>`;
+        }
+
+        return `<p>${section}</p>`;
+    }).join('');
+}
 </script>
 
 <template>
     <div class="chat-container">
         <div class="messages">
             <div v-for="(message, index) in messages" :key="index" :class="['message', message.sender]">
-                {{ message.text }}
+                <template v-if="message.sender === 'bot'">
+                    <div class="message-content" v-html="formatBotMessage(message)"></div>
+                </template>
+                <template v-else>
+                    {{ message.text }}
+                </template>
+            </div>
+            <div v-if="isLoading" class="message bot loading">
+                <div class="dot-typing"></div>
             </div>
         </div>
         <div class="input-area">
@@ -206,5 +279,148 @@ const suggestions = ref([
 .suggestion-btn:hover {
     background: var(--color-background-mute);
     border-color: var(--color-primary-light);
+}
+
+/* Add loading animation styles */
+.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 60px;
+    padding: 1rem !important;
+}
+
+.dot-typing {
+    position: relative;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--color-text);
+    animation: dot-typing 1s infinite linear;
+}
+
+.dot-typing::before,
+.dot-typing::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--color-text);
+    animation: dot-typing 1s infinite linear;
+}
+
+.dot-typing::before {
+    left: -12px;
+    animation-delay: -0.32s;
+}
+
+.dot-typing::after {
+    left: 12px;
+    animation-delay: -0.16s;
+}
+
+@keyframes dot-typing {
+
+    0%,
+    60%,
+    100% {
+        transform: translateY(0);
+    }
+
+    30% {
+        transform: translateY(-4px);
+    }
+}
+
+.message-content {
+    white-space: pre-wrap;
+}
+
+.message-bullets {
+    margin-top: 0.5rem;
+    margin-left: 1.5rem;
+}
+
+.message-bullets li {
+    margin-bottom: 0.25rem;
+}
+
+.message-section {
+    margin-bottom: 0.75rem;
+}
+
+.message-section:last-child {
+    margin-bottom: 0;
+}
+
+.message-section p {
+    margin-bottom: 0.5rem;
+}
+
+.message-bullets {
+    margin: 0.5rem 0 0 1.5rem;
+    list-style-type: disc;
+}
+
+.message-bullets li {
+    margin-bottom: 0.25rem;
+}
+
+.message-bullets li:last-child {
+    margin-bottom: 0;
+}
+
+/* Add to existing styles */
+.suggestion-list {
+    background: var(--color-background-soft);
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+}
+
+.suggestion-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+    cursor: pointer;
+}
+
+.analysis-section {
+    border-left: 3px solid var(--color-primary);
+    padding-left: 1rem;
+    margin: 0.75rem 0;
+}
+
+.reflection-question {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    background: rgba(37, 99, 235, 0.1);
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+}
+
+.question-icon {
+    background: var(--color-primary);
+    color: white;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-weight: bold;
+}
+
+.error-message {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
 }
 </style>

@@ -31,40 +31,13 @@ The CBN models relationships between environmental, economic, and social factors
     }
 
     async processUserInput(cbn: CBN, userInput: string): Promise<LLMResponse> {
-        const prompt = `
-You are a helpful assistant for building Causal Bayesian Networks (CBNs) focused on seagrass restoration.
-
-Analyze this relationship in the current network:
-Water Quality → Seagrass Biomass
-
-Please explain:
-1. The causal mechanism
-2. Current states and probabilities
-3. Key environmental factors
-4. Potential interventions
-
-Current CBN state:
-${JSON.stringify(cbn, null, 2)}
-
-User input: "${userInput}"
-
-Respond in this format:
-1. First provide a natural language explanation
-2. Then provide a JSON object with:
-{
-    "updated_cbn": null,
-    "tentative_suggestions": ["suggestion1", "suggestion2"],
-    "reflection_prompts": ["question1", "question2"],
-    "subclaims": ["subclaim1", "subclaim2"]
-}`;
-
         try {
             const response = await fetch(this.config.baseUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "Authorization": `Bearer ${this.config.apiKey}`,
-                    "HTTP-Referer": "https://localhost:3000",
+                    "HTTP-Referer": window.location.origin,
                     "X-Title": "Seagrass CBN Builder",
                 },
                 body: JSON.stringify({
@@ -72,72 +45,45 @@ Respond in this format:
                     messages: [
                         {
                             role: "system",
-                            content:
-                                "You are an AI assistant that helps build Causal Bayesian Networks. Respond with a natural language explanation followed by a JSON object.",
+                            content: `${this.basePrompt}
+You analyze Causal Bayesian Networks (CBNs) for seagrass restoration.
+Respond with a raw JSON object (no markdown formatting) containing these fields:
+{
+    "updated_cbn": CBN | null,
+    "tentative_suggestions": string[],
+    "reflection_prompts": string[],
+    "subclaims": string[]
+}
+Do not include markdown code blocks or any other formatting in your response.`,
                         },
                         {
                             role: "user",
-                            content: prompt,
+                            content:
+                                `Analyze this relationship in the CBN: ${userInput}\nCurrent network state: ${
+                                    JSON.stringify(cbn, null, 2)
+                                }`,
                         },
                     ],
                     temperature: 0.7,
-                    max_tokens: 2500,
-                    top_p: 1,
-                    frequency_penalty: 0,
-                    presence_penalty: 0,
+                    max_tokens: 1000,
+                    response_format: { type: "json_object" },
                 }),
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                console.error("API Error:", errorData);
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(
+                    `API error: ${response.status} - ${
+                        JSON.stringify(errorData)
+                    }`,
+                );
             }
 
             const result = await response.json();
-
-            if (!result.choices?.[0]?.message?.content) {
-                throw new Error("Invalid API response format");
-            }
-
-            const content = result.choices[0].message.content;
-
-            // Split the content into natural language and JSON parts
-            const jsonStartMatch = content.match(/\{[\s\S]*\}/);
-            if (!jsonStartMatch) {
-                throw new Error("No JSON object found in response");
-            }
-
-            const jsonStr = jsonStartMatch[0];
-            const explanation = content.substring(0, content.indexOf(jsonStr))
-                .trim();
-
-            // Parse the JSON part
-            const jsonResponse = JSON.parse(jsonStr);
-
-            return {
-                updated_cbn: jsonResponse.updated_cbn || cbn,
-                tentative_suggestions: [
-                    explanation,
-                    ...(jsonResponse.tentative_suggestions || []),
-                ],
-                reflection_prompts: jsonResponse.reflection_prompts || [],
-                subclaims: jsonResponse.subclaims || [],
-            };
+            return this.validateAndNormalizeLLMResponse(result, cbn);
         } catch (error) {
-            console.error("Error processing user input:", error);
-            // Provide a more informative fallback response
-            return {
-                updated_cbn: cbn,
-                tentative_suggestions: [
-                    "Water Quality has a direct positive influence on Seagrass Biomass. Good water quality, characterized by appropriate light penetration and nutrient levels, is essential for seagrass growth and survival. When water quality is poor, it can limit photosynthesis and reduce seagrass biomass production.",
-                ],
-                reflection_prompts: [
-                    "How might improving water quality affect seagrass recovery rates?",
-                    "What other environmental factors interact with water quality?",
-                ],
-                subclaims: [],
-            };
+            console.error("LLM Service Error:", error);
+            throw error;
         }
     }
 
@@ -146,11 +92,20 @@ Respond in this format:
         fallbackCBN: CBN,
     ): LLMResponse {
         try {
-            const response = JSON.parse(
-                typeof result === "string"
-                    ? result
-                    : result.choices[0].message.content,
-            );
+            // Extract content from the LLM response
+            let content = typeof result === "string"
+                ? result
+                : result.choices[0].message.content;
+
+            // Clean up markdown formatting if present
+            if (content.includes("```json")) {
+                content = content.replace(/```json\n|\n```/g, "");
+            } else if (content.includes("```")) {
+                content = content.replace(/```\n|\n```/g, "");
+            }
+
+            // Parse the cleaned JSON
+            const response = JSON.parse(content.trim());
 
             // Ensure the updated_cbn maintains the correct structure
             if (response.updated_cbn) {
@@ -179,11 +134,18 @@ Respond in this format:
                 subclaims: response.subclaims || [],
             };
         } catch (error) {
-            console.error("Error parsing LLM response:", error);
+            console.error(
+                "Error parsing LLM response:",
+                error,
+                "\nRaw response:",
+                result,
+            );
             return {
                 updated_cbn: fallbackCBN,
-                tentative_suggestions: ["Error: Invalid response format"],
-                reflection_prompts: ["Please try again"],
+                tentative_suggestions: [
+                    "Error: Could not process the response",
+                ],
+                reflection_prompts: ["Please try rephrasing your question"],
                 subclaims: [],
             };
         }

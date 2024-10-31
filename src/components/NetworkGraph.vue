@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, watch, ref, onUnmounted } from 'vue'
+import { onMounted, watch, ref, onUnmounted, computed } from 'vue'
 import { Network } from 'vis-network'
 import { DataSet } from 'vis-data'
 import type { Node, Edge, CBN } from '../types/cbn'
 import type { IdType, NodeChosenNodeFunction, NodeChosenLabelFunction } from 'vis-network'
 import type { DataInterfaceNodes, DataInterfaceEdges, Data } from 'vis-network'
 import type { Options } from 'vis-network'
+import { useColorScale } from '../composables/useColorScale'
 
 const props = defineProps<{
     nodes: Node[]
@@ -27,6 +28,8 @@ const network = ref<Network | null>(null)
 const nodePositions = ref(new Map<string, { x: number, y: number }>())
 
 const container = ref<HTMLElement | null>(null)
+
+const { getColorForCategory } = useColorScale()
 
 const initNetwork = () => {
     if (!container.value) return
@@ -106,14 +109,14 @@ const initNetwork = () => {
             }).join('\n')}${node.description ? '\n\nDescription:\n' + node.description : ''}`,
             shape: 'box',
             color: {
-                background: '#2a2a2a',
+                background: getColorForCategory(node.category),
                 border: '#3b82f6',
                 highlight: {
-                    background: '#333333',
+                    background: getColorForCategory(node.category),
                     border: '#60a5fa',
                 },
                 hover: {
-                    background: '#333333',
+                    background: getColorForCategory(node.category),
                     border: '#60a5fa',
                 }
             },
@@ -137,7 +140,7 @@ const initNetwork = () => {
                 right: 10,
                 bottom: 10,
                 left: 10
-            },
+            } as const,
             shadow: {
                 enabled: true,
                 color: 'rgba(0,0,0,0.5)',
@@ -211,7 +214,12 @@ const initNetwork = () => {
                 size: 14,
                 face: 'system-ui'
             },
-            margin: 10,
+            margin: {
+                top: 10,
+                right: 10,
+                bottom: 10,
+                left: 10
+            },
             widthConstraint: {
                 minimum: 200,
                 maximum: 250
@@ -223,7 +231,18 @@ const initNetwork = () => {
                 size: 5,
                 x: 2,
                 y: 2
-            }
+            },
+            chosen: {
+                node: function (values: any, id: IdType, selected: boolean, hovering: boolean) {
+                    values.borderWidth = selected ? 3 : 2;
+                    values.borderColor = selected ? 'var(--color-primary)' : 'var(--color-border)';
+                    values.shadow = true;
+                    values.shadowColor = selected ? 'var(--color-primary)' : 'rgba(0,0,0,0.5)';
+                },
+                label: function (values: any, id: IdType, selected: boolean, hovering: boolean) {
+                    values.color = selected ? 'var(--color-primary)' : 'var(--color-text)';
+                }
+            } as const
         },
         edges: {
             font: {
@@ -246,7 +265,25 @@ const initNetwork = () => {
         },
         autoResize: true,
         height: '100%',
-        width: '100%'
+        width: '100%',
+        manipulation: {
+            enabled: true,
+            addNode: false,
+            addEdge: false,
+            deleteNode: false,
+            deleteEdge: false,
+        },
+        interaction: {
+            hover: true,
+            tooltipDelay: 300,
+            zoomView: true,
+            navigationButtons: true,
+            keyboard: {
+                enabled: true,
+                speed: { x: 10, y: 10, zoom: 0.1 },
+                bindToWindow: false
+            }
+        }
     }
 
     network.value = new Network(
@@ -302,14 +339,84 @@ const saveCurrentPositions = () => {
         nodePositions.value.set(id, pos)
     })
 }
+
+const resetView = () => {
+    if (network.value) {
+        // Enable physics to reorganize nodes
+        network.value.setOptions({
+            physics: {
+                enabled: true,
+                stabilization: {
+                    enabled: true,
+                    iterations: 1000
+                }
+            }
+        });
+
+        // Wait for stabilization, then disable physics and fit view
+        network.value.once('stabilized', () => {
+            network.value?.setOptions({ physics: { enabled: false } });
+            network.value?.fit({
+                animation: {
+                    duration: 1000,
+                    easingFunction: 'easeInOutQuad'
+                }
+            });
+        });
+    }
+}
+
+const filters = ref({
+    category: 'all',
+    searchTerm: ''
+})
+
+const filteredNodes = computed(() => {
+    return props.nodes.filter(node => {
+        if (filters.value.category !== 'all' && node.category !== filters.value.category) return false
+        if (filters.value.searchTerm && !node.name.toLowerCase().includes(filters.value.searchTerm.toLowerCase())) return false
+        return true
+    })
+})
+
+const categories = computed(() => ['all', ...new Set(props.nodes.map(n => n.category))])
+
+const handleZoom = (direction: 'in' | 'out') => {
+    if (!network.value) return
+    const scale = direction === 'in' ? 1.2 : 0.8
+    network.value.moveTo({
+        scale: network.value.getScale() * scale,
+        animation: {
+            duration: 200,
+            easingFunction: 'easeInOutQuad'
+        }
+    })
+}
 </script>
 
 <template>
     <div class="graph-container">
         <div class="toolbar">
-            <button @click="network?.fit()">
-                Reset View
-            </button>
+            <div class="toolbar-group">
+                <button @click="resetView" title="Reset View">
+                    <i class="fas fa-compress-arrows-alt"></i>
+                </button>
+                <button @click="handleZoom('in')" title="Zoom In">
+                    <i class="fas fa-search-plus"></i>
+                </button>
+                <button @click="handleZoom('out')" title="Zoom Out">
+                    <i class="fas fa-search-minus"></i>
+                </button>
+            </div>
+
+            <div class="toolbar-group">
+                <select v-model="filters.category">
+                    <option v-for="category in categories" :key="category" :value="category">
+                        {{ category === 'all' ? 'All Categories' : category }}
+                    </option>
+                </select>
+                <input type="search" v-model="filters.searchTerm" placeholder="Search nodes..." class="search-input">
+            </div>
         </div>
 
         <div v-if="props.selectedNodeId" class="node-info-overlay">
@@ -327,6 +434,18 @@ const saveCurrentPositions = () => {
         </div>
 
         <div id="network" ref="container"></div>
+
+        <div class="minimap">
+            <!-- Add minimap implementation -->
+        </div>
+
+        <div class="legend">
+            <h4>Categories</h4>
+            <div v-for="category in categories.filter(c => c !== 'all')" :key="category" class="legend-item">
+                <span class="color-dot" :style="{ background: getColorForCategory(category) }"></span>
+                <span>{{ category }}</span>
+            </div>
+        </div>
     </div>
 </template>
 
@@ -342,30 +461,65 @@ const saveCurrentPositions = () => {
 }
 
 .toolbar {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1rem;
+    background: var(--color-background-soft);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+}
+
+.toolbar-group {
     display: flex;
     gap: 0.5rem;
-    background: var(--color-background);
-    padding: 0.5rem;
-    border-radius: 8px;
 }
 
-.toolbar button {
-    padding: 0.5rem 1rem;
+.search-input {
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: var(--color-background);
+    color: var(--color-text);
+    width: 200px;
+}
+
+.legend {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    background: var(--color-background-soft);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-md);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+}
+
+.color-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.minimap {
+    position: absolute;
+    bottom: 1rem;
+    left: 1rem;
+    width: 200px;
+    height: 150px;
     background: var(--color-background-soft);
     border: 1px solid var(--color-border);
-    border-radius: 6px;
-    color: var(--color-text);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    white-space: nowrap;
-}
-
-.toolbar button:hover {
-    background: var(--color-border);
+    border-radius: 8px;
+    overflow: hidden;
 }
 
 #network {
